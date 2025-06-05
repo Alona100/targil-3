@@ -1,72 +1,85 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <sys/wait.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
-#include <semaphore.h>
-#include <fcntl.h>
+#include <sys/sem.h>
+#include <sys/wait.h>
 
 #define NUM_PROCESSES 100
 
+
+void sem_wait(int semid) {
+    struct sembuf p = {0, -1, 0};
+    semop(semid, &p, 1);
+}
+
+void sem_signal(int semid) {
+    struct sembuf v = {0, 1, 0};
+    semop(semid, &v, 1);
+}
+
 int main() {
-    int shm_id;
+    int shm_id, sem_id;
     int *shared_sum;
 
-  
+
     shm_id = shmget(IPC_PRIVATE, sizeof(int), IPC_CREAT | 0666);
-    if (shm_id < 0) {
-        perror("shmget failed");
+    if (shm_id == -1) {
+        perror("shmget");
         exit(1);
     }
+
 
     shared_sum = (int *)shmat(shm_id, NULL, 0);
-    if (shared_sum == (int *)-1) {
-        perror("shmat failed");
+    if (shared_sum == (void *)-1) {
+        perror("shmat");
         exit(1);
     }
 
-    *shared_sum = 0; 
+    *shared_sum = 0; // אתחול הסכום
 
-  
-    sem_t *sem = sem_open("/sum_sem", O_CREAT | O_EXCL, 0644, 1);
-    if (sem == SEM_FAILED) {
-        perror("sem_open failed");
-        shmctl(shm_id, IPC_RMID, NULL);
+ 
+    sem_id = semget(IPC_PRIVATE, 1, IPC_CREAT | 0666);
+    if (sem_id == -1) {
+        perror("semget");
         exit(1);
     }
 
-  
+
+    if (semctl(sem_id, 0, SETVAL, 1) == -1) {
+        perror("semctl");
+        exit(1);
+    }
+
+ 
     for (int i = 1; i <= NUM_PROCESSES; i++) {
         pid_t pid = fork();
         if (pid < 0) {
-            perror("fork failed");
+            perror("fork");
             exit(1);
         } else if (pid == 0) {
-            
-
-        
-            sem_wait(sem);
-            *shared_sum += i;
-            sem_post(sem);
-
          
+            sem_wait(sem_id);
+            *shared_sum += i;
+            sem_signal(sem_id);
+
+            shmdt(shared_sum);
             exit(0);
         }
     }
 
-   
+
     for (int i = 0; i < NUM_PROCESSES; i++) {
         wait(NULL);
     }
 
-    printf("Sum from 1 to 100 is: %d\n", *shared_sum);
+    printf("Sum from 1 to 100 is: %d\n", *shared_sum);  // אמור להיות 5050
 
-  
+
     shmdt(shared_sum);
     shmctl(shm_id, IPC_RMID, NULL);
-    sem_close(sem);
-    sem_unlink("/sum_sem");
+    semctl(sem_id, 0, IPC_RMID);
 
     return 0;
 }
